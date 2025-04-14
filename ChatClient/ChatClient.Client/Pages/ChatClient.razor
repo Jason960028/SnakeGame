@@ -1,0 +1,271 @@
+﻿@*
+Author:    Jason Chang
+Partner:   Soyoun Kim
+Date:      Nov 8 2024
+Course:    CS 3500, University of Utah, School of Computing
+Copyright: CS 3500 and Jason Chang - This work may not
+           be copied for use in Academic Coursework.
+   
+    I, Jason Chang, certify that I wrote this code from scratch and
+    did not copy it in part or whole from another source.  All
+    references used in the completion of the assignments are cited
+    in my README file.
+   
+File Contents:
+  The UI layout includes:
+    -This file contains a Blazor component written in C# and Razor syntax,
+     defining a Chat Client page with an interactive UI for sending and 
+     receiving messages over a network connection.
+    -Includes field for user to enter their user name and message and 
+     button to connect and disconnect to the server.
+    -A display area for showing received and sent chat messages, formatted to
+     differentiate between messages sent by the user and those received from others.
+  The @code block includes:
+    -Methods to handle connecting and disconnecting from the server, 
+     message input updates, and sending messages.
+    -Method to determine if a message was sent by the current user,
+     handle text input and key press events.
+*@
+@page "/chatclient"
+@rendermode InteractiveServer
+@using CS3500.Networking
+
+
+<PageTitle>Chat Client</PageTitle>
+
+<h1>Chat Client</h1>
+
+<div id="ConnectionInputs">
+    <div class="input-row">
+        <label for="url"> Server Address: </label>
+        <input id="url" disabled="@network.IsConnected" type="text" @bind="ServerNameOrAddress" />
+        <label for="url"> Port: </label>
+        <input id="port" disabled="@network.IsConnected" type="number" @bind="ServerPort" class="port" />
+        @if ( network.IsConnected )
+        {
+            <button class="btn btn-primary" @onclick="DisconnectFromServer">Disconnect</button>
+        }
+        else
+        {
+            <button class="btn btn-primary" @onclick="ConnectToServer">Connect</button>
+        }
+    </div>
+
+
+    @{
+        bool connected = network.IsConnected;
+        bool disconnected = !network.IsConnected;
+        string grayedOut = disconnected ? "grayedOut" : string.Empty;
+        string grayedOut1 = connected ? "grayedOut" : string.Empty;
+    }
+
+    <div class="input-row">
+        <label for="message"> ID: </label>
+        <input id="username" type="text" class="@grayedOut1" disabled="@(connected)" @bind="ID"/>
+        <label for="message"> Chat: </label>
+        <input id="message" class="@grayedOut" disabled="@(disconnected)" type="text"
+               value="@messageText" @oninput="HandleInputChange" @onkeypress="HandleSendMessageKeyPress" />
+
+    </div>
+    <div class="input-row">
+        <div class="input-col">
+            <div id="Messages" class="container @grayedOut">
+                @foreach ( var line in AllMessages )
+                {
+                    // Check if the message is sent by the current user and format it accordingly
+                    if (LineIsForThisId(line, ID))
+                    {
+                        <div class="message sent">
+                                        <span class="themClass">
+                                            @line
+                                        </span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="message received">
+                                    <span class="themClass">
+                                    @line
+                                    </span>
+                        </div>
+                    }
+                }
+
+            </div>
+        </div>
+    </div>
+</div>
+
+
+@code
+{
+    /// <summary>
+    /// Instance used for logging information
+    /// </summary>
+    private ILogger logger = null!;
+
+    /// <summary>
+    /// Default server name
+    /// </summary>
+    private string ServerNameOrAddress = "localhost";
+
+    /// <summary>
+    /// Default user name
+    /// </summary>
+    private string ID = string.Empty;
+    
+    /// <summary>
+    /// Default message
+    /// </summary>
+    private string messageText = string.Empty;
+
+    /// <summary>
+    /// Default server port
+    /// </summary>
+    private int ServerPort = 11000;
+
+    /// <summary>
+    /// The NetworkConnection object representing a connection with the server
+    /// </summary>
+    private NetworkConnection network = null!;
+
+    /// <summary>
+    /// The string shown in the message display area, representing all messages seen
+    /// </summary>
+    private string MessageDisplayTextAreaData
+    {
+        get
+        {
+            return string.Join( "\n", AllMessages );
+        }
+    }
+
+    /// <summary>
+    /// All the messages seen by the server
+    /// </summary>
+    private List<string> AllMessages = new();
+
+    /// <summary>
+    /// Helper function that identifies if the line is written with this id or not.
+    /// </summary>
+    /// <param name="line">line</param>
+    /// <param name="id">id</param>
+    /// <returns>true if this line is written with this id.</returns>
+    private bool LineIsForThisId(string line, string id)
+    {
+        if (line.Length < 13 + id.Length)
+        {
+            return false;
+        }
+
+        return line.Substring(11, id.Length).Equals(id) && line[11 + id.Length] == ':';
+    }
+
+    /// <summary>
+    /// Disconnect the network object from the server.
+    /// </summary>
+    private void DisconnectFromServer()
+    {
+        network.Disconnect();
+        logger.LogInformation("disconnetcted from the server.");
+    }
+
+    /// <summary>
+    /// Handler for the connect button
+    /// Attempt to connect to the server, then start an asynchronous loop
+    /// to receive and display messages.
+    /// </summary>
+    private void ConnectToServer()
+    {
+        try
+        {
+            network.Connect( ServerNameOrAddress, ServerPort );
+            logger.LogInformation("Connected to the server");
+
+            // Communicating with the server needs to be asynchronous so that the UI thread 
+            // can continue drawing.
+            new Thread( () =>
+            {
+                while ( network.IsConnected )
+                {
+                    try
+                    {
+                        var message = network.ReadLine();
+                        logger.LogInformation("Received Message from the server.");
+                        AllMessages.Insert( 0, message );
+
+                        // Since we are changing the UI from another thread, we need to
+                        // use the dispatcher for StateHasChanged
+                        InvokeAsync( () => StateHasChanged() );
+                    }
+                    catch
+                    {
+                        logger.LogError("Something Went wrong while reading line or updating the state.");
+                        AllMessages.Insert( 0, "From System: You Are Disconnected" );
+                        InvokeAsync( () => StateHasChanged() );
+                    }
+                }
+            } ).Start();
+        }
+        catch
+        {
+            logger.LogInformation("failed to conect with the server.");
+            AllMessages.Insert( 0, "From System: Wrong Server Address" );
+            
+        }
+
+    }
+
+    /// <summary>
+    /// Handles updating messageText as the user types.
+    /// </summary>
+    /// <param name="e">
+    /// event data from the input field
+    /// </param>
+    private void HandleInputChange(ChangeEventArgs e)
+    {
+        messageText = e.Value?.ToString() ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Handles sending messages when Enter key is pressed.
+    /// </summary>
+    /// <param name="e">
+    /// event data from the keyboard input
+    /// </param>
+    private void HandleSendMessageKeyPress(KeyboardEventArgs e)
+    {
+        // Check if the Enter key was pressed
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(messageText))
+        {
+
+            var name = ID;
+            messageText = $"{DateTime.Now:HH:mm tt} - {name}: {messageText}";
+            network.Send(messageText);
+            logger.LogInformation("Sent message to the server.");
+            messageText = string.Empty; // Clear the input after sending
+            
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+
+    /// <summary>
+    ///   Create a default network object
+    /// </summary>
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        using var loggerFactory = LoggerFactory.Create(builder =>
+        {
+            builder.AddConsole();
+            builder.AddDebug();
+            builder.SetMinimumLevel(LogLevel.Trace);
+        });
+
+        logger = loggerFactory.CreateLogger<ChatClient>();
+        logger.LogInformation("Setting up the network...");
+        network = new();
+    }
+
+}
